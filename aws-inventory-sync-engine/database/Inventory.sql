@@ -171,6 +171,41 @@ CREATE TABLE sync_queue (
 );
 
 -- ============================================================
+-- 10. SHIPMENT BATCHES (for bulk imports)
+-- ============================================================
+CREATE TABLE shipment_batches (
+    shipment_id         BIGSERIAL PRIMARY KEY,
+    batch_code          TEXT UNIQUE NOT NULL,         -- e.g., 'TINA_ORDER_2026_06'
+    naira_per_usd       NUMERIC(10,2) NOT NULL,       -- 1470
+    rmb_per_usd         NUMERIC(10,2) NOT NULL,       -- 7
+    total_freight_clr   NUMERIC(14,2) NOT NULL,       -- 28500000
+    imported_at         TIMESTAMPTZ DEFAULT now()
+);
+
+-- ============================================================
+-- 11. SHIPMENT ITEMS (for bulk imports)
+-- ============================================================
+CREATE TABLE shipment_items (
+    shipment_item_id    BIGSERIAL PRIMARY KEY,
+    shipment_id         BIGINT NOT NULL REFERENCES shipment_batches(shipment_id),
+    variant_id          BIGINT NOT NULL REFERENCES product_variants(variant_id),
+    ctns                INTEGER NOT NULL,
+    qty                 INTEGER NOT NULL,
+    unit_price_rmb      NUMERIC(12,2) NOT NULL,
+    total_price_rmb     NUMERIC(12,2) NOT NULL,
+    cbm                 NUMERIC(8,4),
+    length_cm           NUMERIC(6,2),
+    width_cm            NUMERIC(6,2),
+    height_cm           NUMERIC(6,2),
+    naira_cost_china    NUMERIC(12,2),
+    freight_per_unit    NUMERIC(12,2),
+    landed_wh_price     NUMERIC(12,2),
+    lcl_selling_price   NUMERIC(12,2),
+    gross_sale_value    NUMERIC(14,2),
+    profitability       NUMERIC(12,2)
+);
+
+-- ============================================================
 -- INDEXES
 -- ============================================================
 
@@ -203,6 +238,11 @@ CREATE UNIQUE INDEX idx_movements_client_id ON stock_movements(client_id, create
 
 -- Sync queue
 CREATE INDEX idx_sync_queue_pending ON sync_queue (created_at) WHERE status = 'PENDING';
+
+-- Shipment batches/items
+CREATE INDEX idx_shipment_items_shipment ON shipment_items(shipment_id);
+CREATE INDEX idx_shipment_items_variant ON shipment_items(variant_id);
+CREATE INDEX idx_shipment_batches_imported ON shipment_batches(imported_at);
 
 -- ============================================================
 -- CONSTRAINTS (added after initial table creation)
@@ -243,6 +283,20 @@ ALTER TABLE stock_transfers
 -- Stock transfer lines
 ALTER TABLE stock_transfer_lines
     ADD CONSTRAINT chk_transfer_qty_positive CHECK (quantity > 0);
+
+
+-- Shipment batches
+ALTER TABLE shipment_batches
+    ADD CONSTRAINT chk_naira_rate_pos CHECK (naira_per_usd > 0),
+    ADD CONSTRAINT chk_rmb_rate_pos CHECK (rmb_per_usd > 0),
+    ADD CONSTRAINT chk_freight_clr_nonneg CHECK (total_freight_clr >= 0);
+
+-- Shipment items
+ALTER TABLE shipment_items
+    ADD CONSTRAINT chk_shipment_items_qty_pos CHECK (qty > 0),
+    ADD CONSTRAINT chk_shipment_items_ctns_pos CHECK (ctns > 0),
+    ADD CONSTRAINT chk_unit_price_rmb_nonneg CHECK (unit_price_rmb >= 0),
+    ADD CONSTRAINT chk_landed_wh_nonneg CHECK (landed_wh_price >= 0);
 
 -- ============================================================
 -- TRIGGER FUNCTIONS

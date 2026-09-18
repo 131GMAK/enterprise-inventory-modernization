@@ -108,6 +108,9 @@ CREATE TABLE stock_movements (
     PRIMARY KEY (movement_id, created_at)
 ) PARTITION BY RANGE (created_at);
 
+CREATE TABLE stock_movements_default 
+PARTITION OF stock_movements DEFAULT;
+
 -- Partitions (monthly ranges)
 CREATE TABLE stock_movements_2026_09 PARTITION OF stock_movements
     FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');

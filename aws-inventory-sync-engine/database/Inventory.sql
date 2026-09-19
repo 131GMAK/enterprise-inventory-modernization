@@ -17,6 +17,22 @@ CREATE TABLE categories (
     created_at      TIMESTAMPTZ DEFAULT now()
 );
 
+-- 1. Insert Top-Level Parent Categories
+INSERT INTO categories (name, slug) VALUES
+    ('Children’s Toys', 'childrens-toys'),
+    ('Children Educational Items', 'children-educational-items'),
+    ('Party Souvenirs', 'party-souvenirs'),
+    ('Back to School', 'back-to-school');
+
+-- 2. Insert Subcategories linked to Parent Category IDs
+INSERT INTO categories (name, slug, parent_id) VALUES
+    ('Wooden Toys', 'wooden-toys', (SELECT category_id FROM categories WHERE slug = 'childrens-toys')),
+    ('Costumes', 'costumes', (SELECT category_id FROM categories WHERE slug = 'childrens-toys')),
+    ('Montessori Educational Items', 'montessori-educational-items', (SELECT category_id FROM categories WHERE slug = 'children-educational-items')),
+    ('Party Favors', 'party-favors', (SELECT category_id FROM categories WHERE slug = 'party-souvenirs')),
+    ('Balloon', 'balloon', (SELECT category_id FROM categories WHERE slug = 'party-souvenirs')),
+    ('Leisure Books', 'leisure-books', (SELECT category_id FROM categories WHERE slug = 'back-to-school'));
+
 -- ============================================================
 -- 2. PRODUCTS (Parent product)
 -- ============================================================

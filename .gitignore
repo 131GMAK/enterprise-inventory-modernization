@@ -216,3 +216,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Windows System Files & Excel Temporary Lock Files
+Thumbs.db
+desktop.ini
+ehthumbs.db
+~$*.xlsx
+~$*.xls
+
+# Editor & IDE Settings
+.vscode/
+.idea/
+
+# Database Local Dumps & Logs
+*.sql.bak
+*.dump
+*.log
+
+# Frontend & Full-Stack Dependencies (for Next.js/React extension)
+node_modules/
+.next/
+dist/
+build/

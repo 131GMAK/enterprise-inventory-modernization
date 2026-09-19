@@ -30,12 +30,13 @@ def parse_and_ingest():
     raw_df = pd.read_excel(file_path, header=None)
 
     # 1. Extract Batch Metadata from Row 0
-    batch_code = str(raw_df.iloc[0, 1]).strip().replace(" ", "_")
+    initial_batch = str(raw_df.iloc[0, 1]).strip().replace(" ", "_") if pd.notna(raw_df.iloc[0, 1]) else "BATCH_DEFAULT"
+    current_batch_code = initial_batch
     naira_per_usd = float(raw_df.iloc[0, 22]) if pd.notna(raw_df.iloc[0, 22]) else 1470.0
     rmb_per_usd = float(raw_df.iloc[0, 23]) if pd.notna(raw_df.iloc[0, 23]) else 7.0
     total_freight_clr = float(raw_df.iloc[0, 25]) if pd.notna(raw_df.iloc[0, 25]) else 0.0
 
-    print(f"Batch Code: {batch_code} | NGN/$: {naira_per_usd} | Freight/Clr: NGN {total_freight_clr:,.2f}")
+    print(f"Batch Code: {current_batch_code} | NGN/$: {naira_per_usd} | Freight/Clr: NGN {total_freight_clr:,.2f}")
 
     # 2. Extract Data Rows (Row 2 onwards)
     data_df = raw_df.iloc[2:].copy()
@@ -44,16 +45,25 @@ def parse_and_ingest():
     try:
         with conn.cursor() as cur:
             # Step A: Upsert Parent Shipment Batch
-            cur.execute("""
-                INSERT INTO shipment_batches (batch_code, naira_per_usd, rmb_per_usd, total_freight_clr)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (batch_code) DO UPDATE 
-                SET naira_per_usd = EXCLUDED.naira_per_usd,
+            batch_shipments = {}
+            def get_or_create_shipment_id(b_code):
+                if b_code in batch_shipments:
+                    return batch_shipments[b_code]
+                # Create new shipment ID if not found
+                cur.execute("""
+                    INSERT INTO shipment_batches (batch_code, naira_per_usd, rmb_per_usd, total_freight_clr)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (batch_code) DO UPDATE 
+                    SET naira_per_usd = EXCLUDED.naira_per_usd,
                     rmb_per_usd = EXCLUDED.rmb_per_usd,
                     total_freight_clr = EXCLUDED.total_freight_clr
                 RETURNING shipment_id;
-            """, (batch_code, naira_per_usd, rmb_per_usd, total_freight_clr))
-            shipment_id = cur.fetchone()[0]
+                """, (b_code, naira_per_usd, rmb_per_usd, total_freight_clr))
+                s_id = cur.fetchone()[0]
+                batch_shipments[b_code] = s_id
+                return s_id
+                
+            current_shipment_id = get_or_create_shipment_id(current_batch_code)
 
             # Step B: Retrieve Default Category ('childrens-toys')
             cur.execute("SELECT category_id FROM categories WHERE slug = 'childrens-toys';")
@@ -81,13 +91,23 @@ def parse_and_ingest():
             # Step D: Iterate and Ingest Line Items
             items_processed = 0
             for idx, row in data_df.iterrows():
-                # 1. Combine all non-empty row text to check for summary keywords
+                # 1. DYNAMIC BATCH HEADER CHECK: Look for batch header reset (e.g. "TINA ORDER 2026-6" in Col B)
+                col_b_val = str(row[1]).strip() if pd.notna(row[1]) else ""
+                if "ORDER" in col_b_val.upper() or "BATCH" in col_b_val.upper():
+                    new_batch_code = col_b_val.replace(" ", "_").upper()
+                    if new_batch_code != current_batch_code:
+                        current_batch_code = new_batch_code
+                        current_shipment_id = get_or_create_shipment_id(current_batch_code)
+                        print(f"--> [Row {idx}] Switched active batch header to: {current_batch_code} (Shipment ID: {current_shipment_id})")
+                    continue  # Skip header row itself, move to line items
+
+                # 2. Combine all non-empty row text to check for summary keywords
                 row_text = " ".join([str(val) for val in row.values if pd.notna(val)]).upper()
                 
-                # 2. Extract item number candidate from column index 3
+                # 3. Extract item number candidate from column index 3
                 raw_item_no = str(row[3]).strip() if pd.notna(row[3]) else ""
                 
-                # 3. GUARD CLAUSE: Skip empty rows and container summary/footer rows
+                # 4. GUARD CLAUSE: Skip empty rows and container summary/footer rows
                 summary_indicators = ["CBM FREIGHT", "TOTAL FREIGHT", "CONTAINER", "CTNS"]
                 
                 is_summary_row = any(indicator in row_text for indicator in summary_indicators)
@@ -97,9 +117,9 @@ def parse_and_ingest():
                     print(f"--> Skipping non-item summary/footer row at index {idx}: {row_text[:45]}...")
                     continue
 
-                # --- RESTORED: Explicit raw_sku definition for downstream database insertions ---
+                # 5. Explicit raw_sku definition for downstream database insertions ---
                 raw_sku = str(raw_item_no).strip()
-                unique_sku = f"{batch_code}_{idx}_{raw_sku}"
+                unique_sku = f"{current_batch_code}_{idx}_{raw_sku}"
 
                 ctns = int(row[6]) if pd.notna(row[6]) else 1
                 qty = int(row[7]) if pd.notna(row[7]) else 0
@@ -148,7 +168,7 @@ def parse_and_ingest():
                         gross_sale_value, profitability
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
                 """, (
-                    shipment_id, variant_id, ctns, qty, price_rmb, total_price_rmb,
+                    current_shipment_id, variant_id, ctns, qty, price_rmb, total_price_rmb,
                     cbm, length_cm, width_cm, height_cm, naira_cost_china,
                     freight_unit, landed_wh_price, lcl_selling_price,
                     gross_sale_value, profitability
@@ -166,7 +186,7 @@ def parse_and_ingest():
                 cur.execute("""
                     INSERT INTO stock_movements (location_id, variant_id, movement_type, quantity, reference_type, reference_id, notes)
                     VALUES (%s, %s, 'RECEIVE', %s, 'SHIPMENT_BATCH', %s, %s);
-                """, (location_id, variant_id, qty, str(shipment_id), f"Import {batch_code}"))
+                """, (location_id, variant_id, qty, str(current_shipment_id), f"Import {current_batch_code}"))
 
                 items_processed += 1
 

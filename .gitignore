@@ -238,3 +238,4 @@ node_modules/
 .next/
 dist/
 build/
+aws-inventory-sync-engine/data/SAMPLE.xlsx
